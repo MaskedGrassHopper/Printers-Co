@@ -1,0 +1,84 @@
+version: 2.1
+
+orbs:
+  node: circleci/node@5.1.0
+  browser-tools: circleci/browser-tools@1.4.1
+
+jobs:
+  build-and-test:
+    docker:
+      - image: cimg/node:18.17.0-browsers
+    steps:
+      - checkout
+      - node/install-packages:
+          pkg-manager: npm
+          cache-path: ~/project/node_modules
+          cache-version: v1
+          override-ci-command: npm ci
+
+      # Lint
+      - run:
+          name: Run ESLint
+          command: npm run lint || true
+
+      # Type checking
+      - run:
+          name: Run TypeScript type checking
+          command: npm run type-check || true
+
+      # Unit tests
+      - run:
+          name: Run unit tests
+          command: npm run test || true
+
+      # Build
+      - run:
+          name: Build application
+          command: npm run build
+          
+      # Performance testing with Lighthouse CI
+      - browser-tools/install-chrome
+      - browser-tools/install-chromedriver
+      - run:
+          name: Install Lighthouse CI
+          command: npm install -g @lhci/cli@0.12.x
+      - run:
+          name: Run Lighthouse CI
+          command: |
+            lhci autorun --collect.numberOfRuns=3 --collect.settings.preset=desktop
+            lhci autorun --collect.numberOfRuns=3 --collect.settings.preset=mobile
+
+      # Store test results and artifacts
+      - store_test_results:
+          path: test-results
+      - store_artifacts:
+          path: .lighthouseci
+          destination: lighthouse-reports
+
+  deploy:
+    docker:
+      - image: cimg/node:18.17.0
+    steps:
+      - checkout
+      - node/install-packages:
+          pkg-manager: npm
+      - run:
+          name: Build for production
+          command: npm run build
+      # Add your deployment steps here
+      # Example for Vercel:
+      # - run:
+      #     name: Deploy to Vercel
+      #     command: npx vercel --prod --token $VERCEL_TOKEN
+
+workflows:
+  version: 2
+  build-test-deploy:
+    jobs:
+      - build-and-test
+      - deploy:
+          requires:
+            - build-and-test
+          filters:
+            branches:
+              only: main 

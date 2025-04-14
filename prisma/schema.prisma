@@ -10,65 +10,168 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABSE_URL")
-}
-
-// Add MongoDB datasource for reviews and comments
-datasource mongodb {
-  provider = "mongodb"
+  provider = "mysql"
   url      = env("DATABASE_URL")
 }
 
-// Review model for product reviews
-model Review {
-  id        String   @id @default(auto()) @map("_id") @db.ObjectId
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  rating    Int      @db.Int
-  title     String   @db.String
-  content   String   @db.String
-  helpful   Int      @default(0) @db.Int
+// Core user model with performance optimizations
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String?
+  password      String    // Hashed password
+  role          UserRole  @default(CUSTOMER)
+  isActive      Boolean   @default(true)
+  lastLoginAt   DateTime?
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
   
   // Relations
-  userId    String   @db.String
-  productId String   @db.String
-  comments  Comment[]
-
+  orders        Order[]
+  products      Product[] // For products created by admin/vendor
+  
   // Performance indexes
-  @@index([productId, createdAt]) // For fast product review listing
-  @@index([userId, createdAt]) // For fast user review history
-  @@index([rating]) // For aggregating product ratings
-  @@index([helpful]) // For sorting by most helpful
-
-  // MongoDB specific configuration
-  @@map("reviews")
+  @@index([email]) // For login and unique checks
+  @@index([role, isActive]) // For filtering active users by role
+  @@index([createdAt]) // For user listings and analytics
+  
+  @@map("users")
 }
 
-// Comment model for review comments
-model Comment {
-  id        String   @id @default(auto()) @map("_id") @db.ObjectId
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  content   String   @db.String
-  helpful   Int      @default(0) @db.Int
+// Product model with performance-focused schema
+model Product {
+  id            String    @id @default(cuid())
+  name          String
+  slug          String    @unique // URL-friendly name
+  description   String    @db.Text
+  price         Decimal   @db.Decimal(10, 2)
+  stock         Int       @default(0)
+  isPublished   Boolean   @default(false)
+  specifications Json?    // Flexible product specifications
+  
+  // Timestamps
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
   
   // Relations
-  userId    String   @db.String
-  review    Review   @relation(fields: [reviewId], references: [id])
-  reviewId  String   @db.ObjectId
+  createdBy     User      @relation(fields: [userId], references: [id])
+  userId        String
+  orders        OrderItem[]
+  categories    Category[]
+  images        ProductImage[]
   
-  // Optional parent comment for nested replies
-  parentId  String?  @db.ObjectId
-  parent    Comment? @relation("CommentReplies", fields: [parentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  replies   Comment[] @relation("CommentReplies")
-
   // Performance indexes
-  @@index([reviewId, createdAt]) // For fast comment listing per review
-  @@index([userId, createdAt]) // For user comment history
-  @@index([parentId]) // For efficient nested comment queries
-  @@index([helpful]) // For sorting by most helpful
+  @@index([name]) // For search functionality
+  @@index([slug]) // For URL lookups
+  @@index([price]) // For price filtering
+  @@index([isPublished, createdAt]) // For listing active products
+  @@index([stock]) // For inventory management
+  
+  @@map("products")
+}
 
-  // MongoDB specific configuration
-  @@map("comments")
+// Category model for product categorization
+model Category {
+  id          String    @id @default(cuid())
+  name        String
+  slug        String    @unique
+  description String?   @db.Text
+  
+  // Relations
+  products    Product[]
+  parent      Category?  @relation("CategoryHierarchy", fields: [parentId], references: [id])
+  parentId    String?
+  children    Category[] @relation("CategoryHierarchy")
+  
+  // Timestamps
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  
+  // Performance indexes
+  @@index([slug])
+  @@index([parentId])
+  
+  @@map("categories")
+}
+
+// ProductImage model for storing Azure Blob Storage URLs
+model ProductImage {
+  id          String    @id @default(cuid())
+  url         String    @db.Text
+  alt         String?
+  isMain      Boolean   @default(false)
+  sortOrder   Int       @default(0)
+  
+  // Relations
+  product     Product   @relation(fields: [productId], references: [id])
+  productId   String
+  
+  // Timestamps
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  
+  // Performance indexes
+  @@index([productId, sortOrder])
+  @@index([productId, isMain])
+  
+  @@map("product_images")
+}
+
+// Order model for tracking purchases
+model Order {
+  id            String    @id @default(cuid())
+  status        OrderStatus @default(PENDING)
+  total         Decimal   @db.Decimal(10, 2)
+  
+  // Relations
+  user          User      @relation(fields: [userId], references: [id])
+  userId        String
+  items         OrderItem[]
+  
+  // Timestamps
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+  
+  // Performance indexes
+  @@index([userId, createdAt]) // For user order history
+  @@index([status, createdAt]) // For order management
+  
+  @@map("orders")
+}
+
+// OrderItem for individual products in an order
+model OrderItem {
+  id            String    @id @default(cuid())
+  quantity      Int
+  price         Decimal   @db.Decimal(10, 2) // Price at time of purchase
+  
+  // Relations
+  order         Order     @relation(fields: [orderId], references: [id])
+  orderId       String
+  product       Product   @relation(fields: [productId], references: [id])
+  productId     String
+  
+  // Timestamps
+  createdAt     DateTime  @default(now()) @map("created_at")
+  
+  // Performance indexes
+  @@index([orderId]) // For order details lookup
+  @@index([productId]) // For product purchase history
+  
+  @@map("order_items")
+}
+
+enum UserRole {
+  CUSTOMER
+  VENDOR
+  ADMIN
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  PROCESSING
+  SHIPPED
+  DELIVERED
+  CANCELLED
 }

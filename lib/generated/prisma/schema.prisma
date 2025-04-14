@@ -1,0 +1,171 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// Core user model with performance optimizations
+model User {
+  id          String    @id @default(cuid())
+  email       String    @unique
+  name        String?
+  password    String // Hashed password
+  role        UserRole  @default(CUSTOMER)
+  isActive    Boolean   @default(true)
+  lastLoginAt DateTime?
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  orders   Order[]
+  products Product[] // For products created by admin/vendor
+
+  // Performance indexes
+  @@index([email]) // For login and unique checks
+  @@index([role, isActive]) // For filtering active users by role
+  @@index([createdAt]) // For user listings and analytics
+  @@map("users")
+}
+
+// Product model with performance-focused schema
+model Product {
+  id             String  @id @default(cuid())
+  name           String
+  slug           String  @unique // URL-friendly name
+  description    String  @db.Text
+  price          Decimal @db.Decimal(10, 2)
+  stock          Int     @default(0)
+  isPublished    Boolean @default(false)
+  specifications Json? // Flexible product specifications
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  createdBy  User           @relation(fields: [userId], references: [id])
+  userId     String
+  orders     OrderItem[]
+  categories Category[]
+  images     ProductImage[]
+
+  // Performance indexes
+  @@index([name]) // For search functionality
+  @@index([slug]) // For URL lookups
+  @@index([price]) // For price filtering
+  @@index([isPublished, createdAt]) // For listing active products
+  @@index([stock]) // For inventory management
+  @@map("products")
+}
+
+// Category model for product categorization
+model Category {
+  id          String  @id @default(cuid())
+  name        String
+  slug        String  @unique
+  description String? @db.Text
+
+  // Relations
+  products Product[]
+  parent   Category?  @relation("CategoryHierarchy", fields: [parentId], references: [id])
+  parentId String?
+  children Category[] @relation("CategoryHierarchy")
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Performance indexes
+  @@index([slug])
+  @@index([parentId])
+  @@map("categories")
+}
+
+// ProductImage model for storing Azure Blob Storage URLs
+model ProductImage {
+  id        String  @id @default(cuid())
+  url       String  @db.Text
+  alt       String?
+  isMain    Boolean @default(false)
+  sortOrder Int     @default(0)
+
+  // Relations
+  product   Product @relation(fields: [productId], references: [id])
+  productId String
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Performance indexes
+  @@index([productId, sortOrder])
+  @@index([productId, isMain])
+  @@map("product_images")
+}
+
+// Order model for tracking purchases
+model Order {
+  id     String      @id @default(cuid())
+  status OrderStatus @default(PENDING)
+  total  Decimal     @db.Decimal(10, 2)
+
+  // Relations
+  user   User        @relation(fields: [userId], references: [id])
+  userId String
+  items  OrderItem[]
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Performance indexes
+  @@index([userId, createdAt]) // For user order history
+  @@index([status, createdAt]) // For order management
+  @@map("orders")
+}
+
+// OrderItem for individual products in an order
+model OrderItem {
+  id       String  @id @default(cuid())
+  quantity Int
+  price    Decimal @db.Decimal(10, 2) // Price at time of purchase
+
+  // Relations
+  order     Order   @relation(fields: [orderId], references: [id])
+  orderId   String
+  product   Product @relation(fields: [productId], references: [id])
+  productId String
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Performance indexes
+  @@index([orderId]) // For order details lookup
+  @@index([productId]) // For product purchase history
+  @@map("order_items")
+}
+
+enum UserRole {
+  CUSTOMER
+  VENDOR
+  ADMIN
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  PROCESSING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+}
