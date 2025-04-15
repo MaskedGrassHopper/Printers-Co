@@ -1,65 +1,60 @@
-import { NextRequest, NextResponse } from 'next/server'
-import { prisma } from '@/lib/prisma'
-import { ApiResponse, UserResponse, PaginatedResponse } from '@/types/api'
-import { ApiError, handleError, requireRole, CACHE_CONFIG } from '@/lib/api-utils'
-import { UserRole } from '@/types/api'
+import { NextRequest } from 'next/server'
+import { createApiResponse } from '../../lib/api-utils'
+import { createHandler } from '../../lib/api-wrapper'
+import { NotFoundError, ValidationError, AuthorizationError } from '../../lib/errors'
 
-export const runtime = 'edge'
+// Mock data for demonstration
+const users = [
+  { id: 1, name: 'John Doe', email: 'john@example.com' },
+  { id: 2, name: 'Jane Smith', email: 'jane@example.com' },
+]
 
-export async function GET(request: NextRequest) {
-  try {
-    await requireRole(request, [UserRole.ADMIN])
+export const GET = createHandler(async (req: NextRequest) => {
+  const { searchParams } = new URL(req.url)
+  const page = parseInt(searchParams.get('page') || '1')
+  const limit = parseInt(searchParams.get('limit') || '10')
 
-    const { searchParams } = new URL(request.url)
-    const page = parseInt(searchParams.get('page') ?? '1')
-    const limit = Math.min(parseInt(searchParams.get('limit') ?? '10'), 50)
-    const role = searchParams.get('role') as UserRole | null
-    const search = searchParams.get('search')
-
-    const where = {
-      ...(role && { role }),
-      ...(search && {
-        OR: [
-          { email: { contains: search, mode: 'insensitive' } },
-          { name: { contains: search, mode: 'insensitive' } }
-        ]
-      })
-    }
-
-    const [total, users] = await Promise.all([
-      prisma.user.count({ where }),
-      prisma.user.findMany({
-        where,
-        select: {
-          id: true,
-          email: true,
-          name: true,
-          role: true,
-          createdAt: true,
-          isActive: true
-        },
-        skip: (page - 1) * limit,
-        take: limit,
-        orderBy: { createdAt: 'desc' }
-      })
-    ])
-
-    const totalPages = Math.ceil(total / limit)
-
-    return NextResponse.json({
-      data: {
-        items: users,
-        total,
-        page,
-        totalPages,
-        hasMore: page < totalPages
-      },
-      status: 200
-    } as ApiResponse<PaginatedResponse<UserResponse>>, {
-      headers: CACHE_CONFIG.PRIVATE // Don't cache user data
-    })
-
-  } catch (error) {
-    return handleError(error)
+  // Check if user is authenticated (mock check)
+  const authHeader = req.headers.get('authorization')
+  if (!authHeader) {
+    throw new AuthorizationError('Authentication required')
   }
-} 
+
+  // Paginate results
+  const start = (page - 1) * limit
+  const paginatedUsers = users.slice(start, start + limit)
+
+  if (paginatedUsers.length === 0) {
+    throw new NotFoundError('Users')
+  }
+
+  return createApiResponse({
+    items: paginatedUsers,
+    total: users.length,
+    page,
+    limit,
+    hasMore: (page * limit) < users.length
+  })
+})
+
+export const POST = createHandler(async (req: NextRequest) => {
+  const body = await req.json()
+
+  // Additional validation
+  if (!body.email?.includes('@')) {
+    throw new ValidationError('Invalid email format')
+  }
+
+  // Check for duplicate email
+  if (users.some(user => user.email === body.email)) {
+    throw new ValidationError('Email already exists')
+  }
+
+  const newUser = {
+    id: users.length + 1,
+    ...body
+  }
+  users.push(newUser)
+
+  return createApiResponse(newUser, 201)
+}) 

@@ -1,114 +1,62 @@
-import { NextRequest, NextResponse } from 'next/server'
-import { prisma } from '@/lib/prisma'
-import { ApiResponse, PaginatedResponse, CreateProductRequest } from '@/types/api'
-import type { Prisma } from '@prisma/client'
-import { headers } from 'next/headers'
+import { NextRequest } from 'next/server'
+import { createApiResponse } from '../../lib/api-utils'
+import { createHandler } from '../../lib/api-wrapper'
+import { NotFoundError, ValidationError } from '../../lib/errors'
 
 // Cache configuration
 export const runtime = 'edge'
 export const revalidate = 60 // Cache for 1 minute
 
+// Mock data for demonstration
+const products = [
+  { id: 1, name: 'Laser Printer X1', description: 'High-speed laser printer', price: 299.99 },
+  { id: 2, name: 'InkJet Pro', description: 'Professional inkjet printer', price: 199.99 },
+]
+
 // GET handler with pagination, filtering, and search
-export async function GET(request: NextRequest) {
-  try {
-    const { searchParams } = new URL(request.url)
-    const page = parseInt(searchParams.get('page') ?? '1')
-    const limit = Math.min(parseInt(searchParams.get('limit') ?? '10'), 50) // Cap at 50 items
-    const minPrice = searchParams.get('minPrice') ? parseFloat(searchParams.get('minPrice')!) : undefined
-    const maxPrice = searchParams.get('maxPrice') ? parseFloat(searchParams.get('maxPrice')!) : undefined
-    const search = searchParams.get('search') ?? undefined
-    const sortBy = (searchParams.get('sortBy') as 'price' | 'name' | 'createdAt') ?? 'createdAt'
-    const order = (searchParams.get('order') as 'asc' | 'desc') ?? 'desc'
+export const GET = createHandler(async (req: NextRequest) => {
+  const { searchParams } = new URL(req.url)
+  const category = searchParams.get('category')
+  const page = parseInt(searchParams.get('page') || '1')
+  const limit = parseInt(searchParams.get('limit') || '10')
 
-    // Build where clause
-    const where = {
-      ...(search && {
-        OR: [
-          { name: { contains: search, mode: 'insensitive' } },
-          { description: { contains: search, mode: 'insensitive' } },
-        ],
-      }),
-      ...(minPrice && { price: { gte: minPrice } }),
-      ...(maxPrice && { price: { lte: maxPrice } }),
-    }
+  // Filter by category if provided
+  let filteredProducts = category 
+    ? products.filter(p => p.name.toLowerCase().includes(category.toLowerCase()))
+    : products
 
-    // Execute count and find in parallel for performance
-    const [total, items] = await Promise.all([
-      prisma.product.count({ where }),
-      prisma.product.findMany({
-        where,
-        orderBy: { [sortBy]: order },
-        skip: (page - 1) * limit,
-        take: limit,
-        // Select only needed fields for performance
-        select: {
-          id: true,
-          name: true,
-          description: true,
-          price: true,
-          createdAt: true,
-          updatedAt: true,
-        },
-      }),
-    ])
-
-    const totalPages = Math.ceil(total / limit)
-
-    return NextResponse.json({
-      data: {
-        items,
-        total,
-        page,
-        totalPages,
-        hasMore: page < totalPages,
-      },
-      status: 200,
-    } as ApiResponse<PaginatedResponse<typeof items[0]>>, {
-      headers: {
-        'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=300',
-      },
-    })
-  } catch (error) {
-    console.error('[Products API Error]:', error)
-    return NextResponse.json({
-      error: 'Failed to fetch products',
-      status: 500,
-    } as ApiResponse<never>, { status: 500 })
+  if (filteredProducts.length === 0) {
+    throw new NotFoundError('Products')
   }
-}
+
+  // Paginate results
+  const start = (page - 1) * limit
+  const paginatedProducts = filteredProducts.slice(start, start + limit)
+
+  return createApiResponse({
+    items: paginatedProducts,
+    total: filteredProducts.length,
+    page,
+    limit,
+    hasMore: (page * limit) < filteredProducts.length
+  })
+})
 
 // POST handler for creating products
-export async function POST(request: NextRequest) {
-  try {
-    const json = await request.json()
-    const { name, description, price }: CreateProductRequest = json
+export const POST = createHandler(async (req: NextRequest) => {
+  const body = await req.json()
 
-    if (!name || !description || !price) {
-      return NextResponse.json({
-        error: 'Missing required fields',
-        status: 400,
-      } as ApiResponse<never>, { status: 400 })
-    }
-
-    const product = await prisma.product.create({
-      data: {
-        name,
-        description,
-        price,
-      },
-    })
-
-    // Note: Cache invalidation handled by Next.js revalidation
-
-    return NextResponse.json({
-      data: product,
-      status: 201,
-    } as ApiResponse<typeof product>, { status: 201 })
-  } catch (error) {
-    console.error('[Products API Error]:', error)
-    return NextResponse.json({
-      error: 'Failed to create product',
-      status: 500,
-    } as ApiResponse<never>, { status: 500 })
+  // Additional validation if needed (beyond middleware validation)
+  if (body.price <= 0) {
+    throw new ValidationError('Price must be greater than 0')
   }
-} 
+
+  // Simulate adding a new product
+  const newProduct = {
+    id: products.length + 1,
+    ...body
+  }
+  products.push(newProduct)
+
+  return createApiResponse(newProduct, 201)
+}) 

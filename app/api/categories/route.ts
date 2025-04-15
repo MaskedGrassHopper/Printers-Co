@@ -1,61 +1,64 @@
-import { NextRequest, NextResponse } from 'next/server'
-import { prisma } from '@/lib/prisma'
-import { ApiResponse, CategoryResponse, CreateCategoryRequest } from '@/types/api'
-import { ApiError, handleError, requireRole, slugify, CACHE_CONFIG } from '@/lib/api-utils'
-import { UserRole } from '@/types/api'
+import { NextRequest } from 'next/server'
+import { createApiResponse } from '../../lib/api-utils'
+import { createHandler } from '../../lib/api-wrapper'
+import { NotFoundError, ValidationError, ForbiddenError } from '../../lib/errors'
 
-export const runtime = 'edge'
-export const revalidate = 3600 // Cache for 1 hour
+// Mock data for demonstration
+const categories = [
+  { id: 1, name: 'Laser Printers', slug: 'laser-printers' },
+  { id: 2, name: 'Inkjet Printers', slug: 'inkjet-printers' },
+  { id: 3, name: '3D Printers', slug: '3d-printers' },
+]
 
-export async function GET(request: NextRequest) {
-  try {
-    const categories = await prisma.category.findMany({
-      include: {
-        _count: {
-          select: { products: true }
-        }
-      },
-      orderBy: { name: 'asc' }
-    })
+export const GET = createHandler(async (req: NextRequest) => {
+  const { searchParams } = new URL(req.url)
+  const page = parseInt(searchParams.get('page') || '1')
+  const limit = parseInt(searchParams.get('limit') || '10')
 
-    return NextResponse.json({
-      data: categories,
-      status: 200
-    } as ApiResponse<CategoryResponse[]>, {
-      headers: CACHE_CONFIG.LONG
-    })
+  // Paginate results
+  const start = (page - 1) * limit
+  const paginatedCategories = categories.slice(start, start + limit)
 
-  } catch (error) {
-    return handleError(error)
+  if (paginatedCategories.length === 0) {
+    throw new NotFoundError('Categories')
   }
-}
 
-export async function POST(request: NextRequest) {
-  try {
-    await requireRole(request, [UserRole.ADMIN])
-    
-    const json = await request.json()
-    const { name, description, parentId }: CreateCategoryRequest = json
+  return createApiResponse({
+    items: paginatedCategories,
+    total: categories.length,
+    page,
+    limit,
+    hasMore: (page * limit) < categories.length
+  })
+})
 
-    if (!name) {
-      throw new ApiError(400, 'Name is required')
-    }
+export const POST = createHandler(async (req: NextRequest) => {
+  const body = await req.json()
 
-    const category = await prisma.category.create({
-      data: {
-        name,
-        slug: slugify(name),
-        description,
-        parentId
-      }
-    })
-
-    return NextResponse.json({
-      data: category,
-      status: 201
-    } as ApiResponse<CategoryResponse>)
-
-  } catch (error) {
-    return handleError(error)
+  // Check if user is admin
+  if (req.headers.get('x-user-role') !== 'admin') {
+    throw new ForbiddenError('Only admins can create categories')
   }
-} 
+
+  // Validate name
+  if (!body.name || body.name.trim().length < 2) {
+    throw new ValidationError('Category name must be at least 2 characters')
+  }
+
+  // Create slug from name
+  const slug = body.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')
+
+  // Check for duplicate slug
+  if (categories.some(cat => cat.slug === slug)) {
+    throw new ValidationError('Category already exists')
+  }
+
+  const newCategory = {
+    id: categories.length + 1,
+    name: body.name,
+    slug
+  }
+  categories.push(newCategory)
+
+  return createApiResponse(newCategory, 201)
+}) 

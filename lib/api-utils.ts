@@ -54,4 +54,47 @@ export const CACHE_CONFIG = {
   DEFAULT: { 'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=300' },
   LONG: { 'Cache-Control': 'public, s-maxage=3600, stale-while-revalidate=7200' },
   PRIVATE: { 'Cache-Control': 'private, no-cache, no-store, must-revalidate' }
+}
+
+export interface PaginatedResponse<T> {
+  items: T[];
+  total: number;
+  page: number;
+  limit: number;
+  hasMore: boolean;
+}
+
+export function createApiResponse<T>(
+  data: T,
+  status: number = 200
+): NextResponse<ApiResponse<T>> {
+  return NextResponse.json({
+    data,
+    status,
+  }, { status })
+}
+
+export function createApiError(
+  error: string,
+  status: number = 500
+): NextResponse<ApiResponse<never>> {
+  return NextResponse.json({
+    error,
+    status,
+  }, { status })
+}
+
+export function createPaginatedResponse<T>(
+  items: T[],
+  total: number,
+  page: number,
+  limit: number
+): PaginatedResponse<T> {
+  return {
+    items,
+    total,
+    page,
+    limit,
+    hasMore: page * limit < total,
+  }
 } 
